@@ -13,37 +13,147 @@ import numpy as np
 from datetime import datetime
 import time
 import os
+import sys          # 用于强制刷新输出
 
 # ==================== 配置 ====================
 
 WECHAT_WEBHOOK_URL = os.environ.get("FEISHU_WEBHOOK_URL", "")
 if not WECHAT_WEBHOOK_URL:
-    print("⚠️ 未设置 FEISHU_WEBHOOK_URL 环境变量")
+    print("⚠️ 未设置 FEISHU_WEBHOOK_URL 环境变量", flush=True)
 
-# 监控币种（先测试前几个，避免频率超限）
+# ==================== 币种列表（清洗后，去重） ====================
 SYMBOLS = {
+    #  Layer 1 公链
     "bitcoin": "BTCUSDT",
     "ethereum": "ETHUSDT",
     "binancecoin": "BNBUSDT",
     "solana": "SOLUSDT",
     "ripple": "XRPUSDT",
-    # "cardano": "ADAUSDT",     # 待稳定后可逐步添加
-    # "dogecoin": "DOGEUSDT",
-    # "avalanche-2": "AVAXUSDT",
-    # "polkadot": "DOTUSDT",
-    # "chainlink": "LINKUSDT",
+    "cardano": "ADAUSDT",
+    "avalanche-2": "AVAXUSDT",
+    "polkadot": "DOTUSDT",
+    "near": "NEARUSDT",
+    "aptos": "APTUSDT",
+    "sui": "SUIUSDT",
+    "toncoin": "TONUSDT",
+    "trx": "TRXUSDT",
+    "litecoin": "LTCUSDT",
+    "bitcoin-cash": "BCHUSDT",
+    "monero": "XMRUSDT",
+    "ethereum-classic": "ETCUSDT",
+    "algorand": "ALGOUSDT",
+    "vechain": "VETUSDT",
+    "internet-computer": "ICPUSDT",
+    "hedera-hashgraph": "HBARUSDT",
+    "quant-network": "QNTUSDT",
+    "filecoin": "FILUSDT",
+    "theta-token": "THETAUSDT",
+    "tezos": "XTZUSDT",
+    "eos": "EOSUSDT",
+    "nano": "NANOUSDT",
+    "icon": "ICXUSDT",
+    "ontology": "ONTUSDT",
+    "harmony": "ONEUSDT",
+    "kadena": "KDAUSDT",
+    "mina": "MINAUSDT",
+    "celo": "CELOUSDT",
+    #  DeFi 与 DEX
+    "chainlink": "LINKUSDT",
+    "uniswap": "UNIUSDT",
+    "aave": "AAVEUSDT",
+    "maker": "MKRUSDT",
+    "compound": "COMPUSDT",
+    "curve-dao-token": "CRVUSDT",
+    "sushi": "SUSHIUSDT",
+    "pancakeswap": "CAKEUSDT",
+    "thorchain": "RUNEUSDT",
+    "lido-dao": "LDOUSDT",
+    "rocket-pool": "RPLUSDT",
+    "dydx": "DYDXUSDT",
+    "gmx": "GMXUSDT",
+    "1inch": "1INCHUSDT",
+    "balancer": "BALUSDT",
+    "yearn-finance": "YFIUSDT",
+    #  Layer 2 与跨链
+    "polygon": "MATICUSDT",
+    "arbitrum": "ARBUSDT",
+    "optimism": "OPUSDT",
+    "cosmos": "ATOMUSDT",
+    "celestia": "TIAUSDT",
+    "osmosis": "OSMOUSDT",
+    "injective": "INJUSDT",
+    "sei": "SEIUSDT",
+    "manta-network": "MANTAUSDT",
+    "zksync": "ZKUSDT",
+    "starknet": "STRKUSDT",
+    #  稳定币与基础设施（剔除纯稳定币，避免无意义信号）
+    # "tether": "USDTUSDT",        # 稳定币无波动，不参与扫描
+    # "usd-coin": "USDCUSDT",
+    # "dai": "DAIUSDT",
+    # "true-usd": "TUSDUSDT",
+    # "frax": "FRAXUSDT",
+    "wrapped-bitcoin": "WBTCUSDT",
+    "weth": "WETHUSDT",
+    "staked-ether": "STETHUSDT",
+    "bnb": "BNBUSDT",
+    "okb": "OKBUSDT",
+    "cronos": "CROUSDT",
+    "leo-token": "LEOUSDT",
+    "bitget-token": "BGBUSDT",
+    #  去中心化存储与计算
+    "arweave": "ARUSDT",
+    "siacoin": "SCUSDT",
+    "golem": "GLMUSDT",
+    "livepeer": "LPTUSDT",
+    "akash-network": "AKTUSDT",
+    #  Meme 与社区币
+    "dogecoin": "DOGEUSDT",
+    "shiba-inu": "SHIBUSDT",
+    "pepe": "PEPEUSDT",
+    "bonk": "BONKUSDT",
+    "floki": "FLOKIUSDT",
+    "dogwifhat": "WIFUSDT",
+    # "bret": "BRETTUSDT",         # CoinGecko ID 可能不准确，暂注释
+    # "popcat": "POPCATUSDT",
+    #  游戏与元宇宙
+    "decentraland": "MANAUSDT",
+    "the-sandbox": "SANDUSDT",
+    "axie-infinity": "AXSUSDT",
+    "gala": "GALAUSDT",
+    "immutable-x": "IMXUSDT",
+    "illuvium": "ILVUSDT",
+    "pixel": "PIXELUSDT",
+    "portal": "PORTALUSDT",
+    #  AI 与数据
+    "fetch-ai": "FETUSDT",
+    "singularitynet": "AGIXUSDT",
+    "ocean-protocol": "OCEANUSDT",
+    "numeraire": "NMRUSDT",
+    "bittensor": "TAOUSDT",
+    "render-token": "RNDRUSDT",
+    #  其他
+    "kucoin-shares": "KCSUSDT",
+    "huobi-token": "HTUSDT",
+    "gatechain-token": "GTUSDT",
+    "nexo": "NEXOUSDT",
+    "celsius-network": "CELUSDT",
+    "helium": "HNTUSDT",
+    "basic-attention-token": "BATUSDT",
+    "zcash": "ZECUSDT",
+    "dash": "DASHUSDT",
 }
 
+# 技术指标参数
 BB_PERIOD = 20
 EMA_PERIOD = 89
 OHLC_DAYS = 7
-REQUEST_DELAY = 1.5  # 每个请求间隔（秒），防止 429
+REQUEST_DELAY = 2.0          # 增加到 2 秒，避免触发 429 限制
 
-# ==================== 数据获取（带重试） ====================
+# ==================== 数据获取（带重试与404处理） ====================
 
 def get_ohlc_with_retry(coin_id: str, vs_currency: str = "usd", days: int = 7, max_retries: int = 3):
     """
-    带重试机制的 OHLC 获取，遇到 429 自动等待后重试
+    带重试机制的 OHLC 获取，遇到 404 直接跳过，429 自动等待后重试
     """
     url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/ohlc"
     params = {
@@ -55,15 +165,18 @@ def get_ohlc_with_retry(coin_id: str, vs_currency: str = "usd", days: int = 7, m
     for attempt in range(max_retries):
         try:
             response = requests.get(url, params=params, timeout=15)
+            if response.status_code == 404:
+                print(f"  ⚠️ {coin_id} 无效ID，跳过", flush=True)
+                return None
             if response.status_code == 429:
                 wait = (attempt + 1) * 2  # 2s, 4s, 6s
-                print(f"  ⏳ 触发 429 限制，等待 {wait}s 后重试 ({attempt+1}/{max_retries})...")
+                print(f"  ⏳ 触发 429 限制，等待 {wait}s 后重试 ({attempt+1}/{max_retries})...", flush=True)
                 time.sleep(wait)
                 continue
             response.raise_for_status()
             data = response.json()
             if not data:
-                print(f"  ⚠️ {coin_id} 返回空数据")
+                print(f"  ⚠️ {coin_id} 返回空数据", flush=True)
                 return None
             # 转为 DataFrame
             df = pd.DataFrame(data, columns=["timestamp", "open", "high", "low", "close"])
@@ -73,7 +186,7 @@ def get_ohlc_with_retry(coin_id: str, vs_currency: str = "usd", days: int = 7, m
             return df
         except requests.exceptions.RequestException as e:
             if attempt == max_retries - 1:
-                print(f"  Error: 获取 {coin_id} 失败，已达最大重试次数: {e}")
+                print(f"  Error: 获取 {coin_id} 失败，已达最大重试次数: {e}", flush=True)
                 return None
             time.sleep(1)
     return None
@@ -137,7 +250,7 @@ def scan_symbol(coin_id: str, display_name: str):
 
 def send_to_wechat(message: str):
     if not WECHAT_WEBHOOK_URL:
-        print("  ⚠️ 企业微信 Webhook URL 未设置")
+        print("  ⚠️ 企业微信 Webhook URL 未设置", flush=True)
         return
     headers = {"Content-Type": "application/json"}
     payload = {
@@ -149,11 +262,11 @@ def send_to_wechat(message: str):
         response.raise_for_status()
         result = response.json()
         if result.get("errcode") == 0:
-            print("  ✅ 企业微信消息发送成功")
+            print("  ✅ 企业微信消息发送成功", flush=True)
         else:
-            print(f"  ⚠️ 企业微信消息发送失败: {result}")
+            print(f"  ⚠️ 企业微信消息发送失败: {result}", flush=True)
     except Exception as e:
-        print(f"  Error: 发送企业微信消息失败: {e}")
+        print(f"  Error: 发送企业微信消息失败: {e}", flush=True)
 
 def format_result_message(result: dict) -> str:
     symbol = result["symbol"]
@@ -176,27 +289,31 @@ def format_result_message(result: dict) -> str:
 # ==================== 主函数 ====================
 
 def main():
-    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 开始扫描...")
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 开始扫描...", flush=True)
     matched = []
-    for coin_id, display_name in SYMBOLS.items():
-        print(f"  扫描 {display_name}...")
+    total = len(SYMBOLS)
+    print(f"[INFO] 共 {total} 个币种待扫描", flush=True)
+    
+    for idx, (coin_id, display_name) in enumerate(SYMBOLS.items(), 1):
+        print(f"  [{idx}/{total}] 扫描 {display_name}...", flush=True)
         res = scan_symbol(coin_id, display_name)
         if res and res["match"]:
             matched.append(res)
-            print(f"  ✅ {display_name} 符合条件: {res['match']}")
+            print(f"  ✅ {display_name} 符合条件: {res['match']}", flush=True)
         time.sleep(REQUEST_DELAY)  # 避免频率限制
     
     if matched:
         for r in matched:
             send_to_wechat(format_result_message(r))
             time.sleep(0.5)
-        print(f"[INFO] 发现 {len(matched)} 个符合条件的币种，已推送")
+        print(f"[INFO] 发现 {len(matched)} 个符合条件的币种，已推送", flush=True)
     else:
-        heartbeat = f"🕐 扫描完成 [{datetime.now().strftime('%Y-%m-%d %H:%M')}]，扫描 {len(SYMBOLS)} 个币种，未发现符合条件的标的。"
+        heartbeat = f"🕐 扫描完成 [{datetime.now().strftime('%Y-%m-%d %H:%M')}]，扫描 {total} 个币种，未发现符合条件的标的。"
         send_to_wechat(heartbeat)
-        print("[INFO] 未发现符合条件的币种，已发送心跳通知")
+        print("[INFO] 未发现符合条件的币种，已发送心跳通知", flush=True)
     
-    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 扫描完成")
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 扫描完成", flush=True)
 
 if __name__ == "__main__":
+    print("脚本入口点触发", flush=True)
     main()
