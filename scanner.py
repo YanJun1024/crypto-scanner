@@ -3,7 +3,7 @@
 
 """
 加密货币小时线扫描器 - 三连涨/跌 + 布林带与EMA条件
-数据源：币安 Binance (自动获取市值前300的USDT交易对)
+数据源：币安备用域名 (data-api.binance.vision)，自动获取市值前300的USDT交易对
 通知方式：企业微信机器人
 """
 
@@ -25,65 +25,79 @@ if not WECHAT_WEBHOOK_URL:
 BB_PERIOD = 20
 EMA_PERIOD = 89
 KLINES_LIMIT = 100
-REQUEST_DELAY = 0.3         # 币安限制宽松，0.3秒/个，300个约90秒
-TOP_N = 300                 # 取市值前300名
+REQUEST_DELAY = 0.3         # 币安备用域名限流宽松，0.3秒/个，300个约90秒
+TOP_N = 300
 
-# ==================== 动态获取币种列表 ====================
+# API 备用域名
+BINANCE_API_BASE = "https://data-api.binance.vision"
+MEXC_API_BASE = "https://api.mexc.com"   # 备用
+
+# ==================== 动态获取币种列表（支持多数据源） ====================
 
 def get_top_usdt_pairs(limit: int = 300):
     """
-    从币安获取所有 USDT 交易对，按 24h 交易量（近似市值）排序，取前 N 个
-    返回: ["BTCUSDT", "ETHUSDT", ...]
+    尝试从币安备用域名获取 USDT 交易对列表，失败则尝试 MEXC，再失败则返回固定列表
     """
-    url = "https://api.binance.com/api/v3/ticker/24hr"
+    # 候选 API 地址
+    urls = [
+        f"{BINANCE_API_BASE}/api/v3/ticker/24hr",
+        f"{MEXC_API_BASE}/api/v3/ticker/24hr"
+    ]
     
-    try:
-        response = requests.get(url, timeout=30)
-        response.raise_for_status()
-        data = response.json()
-        
-        # 筛选 USDT 交易对，并计算"市值权重" = 价格 × 交易量（近似市值）
-        usdt_pairs = []
-        for item in data:
-            symbol = item.get("symbol", "")
-            if symbol.endswith("USDT") and not any(x in symbol for x in ["UPUSDT", "DOWNUSDT", "BULLUSDT", "BEARUSDT"]):
-                try:
-                    last_price = float(item.get("lastPrice", 0))
-                    volume = float(item.get("volume", 0))
-                    # 近似市值 = 价格 × 交易量（24h交易量可反映流动性热度）
-                    weight = last_price * volume
-                    usdt_pairs.append({
-                        "symbol": symbol,
-                        "weight": weight,
-                        "price": last_price,
-                        "volume": volume
-                    })
-                except (ValueError, TypeError):
-                    continue
-        
-        # 按权重降序排列
-        usdt_pairs.sort(key=lambda x: x["weight"], reverse=True)
-        
-        # 取前 N 个
-        top_pairs = [p["symbol"] for p in usdt_pairs[:limit]]
-        print(f"[INFO] 成功获取 {len(top_pairs)} 个 USDT 交易对", flush=True)
-        return top_pairs
-        
-    except Exception as e:
-        print(f"[ERROR] 获取币种列表失败: {e}", flush=True)
-        # 降级方案：返回固定的主流币种列表
-        return [
-            "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
-            "ADAUSDT", "DOGEUSDT", "AVAXUSDT", "DOTUSDT", "LINKUSDT"
-        ]
+    for url in urls:
+        try:
+            print(f"[INFO] 尝试从 {url} 获取交易对列表...", flush=True)
+            response = requests.get(url, timeout=30)
+            if response.status_code != 200:
+                print(f"  ⚠️ 状态码 {response.status_code}，跳过", flush=True)
+                continue
+            data = response.json()
+            if not data:
+                continue
+            
+            usdt_pairs = []
+            for item in data:
+                symbol = item.get("symbol", "")
+                if symbol.endswith("USDT") and not any(x in symbol for x in ["UPUSDT", "DOWNUSDT", "BULLUSDT", "BEARUSDT"]):
+                    try:
+                        last_price = float(item.get("lastPrice", 0))
+                        volume = float(item.get("volume", 0))
+                        weight = last_price * volume
+                        usdt_pairs.append({
+                            "symbol": symbol,
+                            "weight": weight,
+                            "price": last_price,
+                            "volume": volume
+                        })
+                    except (ValueError, TypeError):
+                        continue
+            
+            if not usdt_pairs:
+                continue
+            usdt_pairs.sort(key=lambda x: x["weight"], reverse=True)
+            top = [p["symbol"] for p in usdt_pairs[:limit]]
+            print(f"[INFO] 成功从 {url} 获取 {len(top)} 个交易对", flush=True)
+            return top
+        except Exception as e:
+            print(f"  Error: {e}", flush=True)
+            continue
+    
+    # 所有数据源均失败，返回降级列表
+    print("[WARN] 所有数据源均失败，使用硬编码主流币种列表", flush=True)
+    return [
+        "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
+        "ADAUSDT", "DOGEUSDT", "AVAXUSDT", "DOTUSDT", "LINKUSDT",
+        "MATICUSDT", "LTCUSDT", "NEARUSDT", "ATOMUSDT", "ALGOUSDT",
+        "FILUSDT", "VETUSDT", "XTZUSDT", "EOSUSDT", "XMRUSDT"
+    ]
 
-# ==================== 数据获取 ====================
+# ==================== K线数据获取（使用备用域名） ====================
 
 def get_klines(symbol: str, interval: str = "1h", limit: int = 100):
     """
-    从币安获取 K 线数据
+    从币安备用域名获取 K 线数据
     """
-    base_url = "https://api.binance.com/api/v3/klines"
+    url = f"{BINANCE_API_BASE}/api/v3/klines"
     params = {
         "symbol": symbol,
         "interval": interval,
@@ -91,7 +105,7 @@ def get_klines(symbol: str, interval: str = "1h", limit: int = 100):
     }
     
     try:
-        response = requests.get(base_url, params=params, timeout=15)
+        response = requests.get(url, params=params, timeout=15)
         if response.status_code != 200:
             return None
         data = response.json()
@@ -211,8 +225,7 @@ def format_result_message(result: dict) -> str:
 def main():
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 开始扫描...", flush=True)
     
-    # 第一步：动态获取市值前300的USDT交易对
-    print("[INFO] 正在获取币安 USDT 交易对列表...", flush=True)
+    # 第一步：动态获取交易对列表
     symbols = get_top_usdt_pairs(limit=TOP_N)
     total = len(symbols)
     print(f"[INFO] 共 {total} 个币种待扫描", flush=True)
