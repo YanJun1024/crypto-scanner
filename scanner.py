@@ -5,6 +5,7 @@
 加密货币小时线扫描器 - 三连涨/跌 + 布林带与EMA条件 + 累计幅度>2%过滤
 数据源：币安备用域名 (data-api.binance.vision)，自动获取市值前100的USDT交易对
 通知方式：企业微信机器人（支持批量合并推送）
+优化：只使用已收盘的K线，避免未完成K线导致的信号闪烁
 """
 
 import requests
@@ -24,9 +25,9 @@ if not WECHAT_WEBHOOK_URL:
 
 BB_PERIOD = 20
 EMA_PERIOD = 89
-KLINES_LIMIT = 100
+KLINES_LIMIT = 100          # 获取100根，丢弃最后一根后剩99根，足够计算
 REQUEST_DELAY = 0.3
-TOP_N = 100                         # ← 修改为前100名
+TOP_N = 100
 MIN_TOTAL_CHANGE = 2.0
 
 BINANCE_API_BASE = "https://data-api.binance.vision"
@@ -34,7 +35,7 @@ MEXC_API_BASE = "https://api.mexc.com"
 
 # ==================== 获取币种列表 ====================
 
-def get_top_usdt_pairs(limit: int = 100):   # ← 默认参数也改为100
+def get_top_usdt_pairs(limit: int = 100):
     urls = [
         f"{BINANCE_API_BASE}/api/v3/ticker/24hr",
         f"{MEXC_API_BASE}/api/v3/ticker/24hr"
@@ -136,7 +137,14 @@ def check_three_candles(df: pd.DataFrame):
 
 def scan_symbol(symbol: str):
     df = get_klines(symbol, limit=KLINES_LIMIT)
-    if df is None or len(df) < EMA_PERIOD + 3:
+    if df is None:
+        return None
+    
+    # 🟢 丢弃当前未收盘的K线（最后一行），避免信号闪烁
+    df = df.iloc[:-1]   # 去掉最后一行
+    
+    # 丢弃后需要确保数据足够计算
+    if len(df) < EMA_PERIOD + 3:
         return None
     
     bb_middle, ema_89 = calculate_indicators(df)
