@@ -140,7 +140,7 @@ def scan_symbol(symbol: str):
     if df is None:
         return None
     
-    # 🟢 丢弃当前未收盘的K线（最后一行），避免信号闪烁
+    # 🟢 关键优化：丢弃当前未收盘的K线（最后一行），避免信号闪烁
     df = df.iloc[:-1]   # 去掉最后一行
     
     # 丢弃后需要确保数据足够计算
