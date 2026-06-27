@@ -3,7 +3,7 @@
 
 """
 加密货币小时线扫描器 - 三连涨/跌 + 布林带与EMA条件 + 累计幅度>2%过滤
-数据源：币安备用域名 (data-api.binance.vision)，自动获取市值前300的USDT交易对
+数据源：币安备用域名 (data-api.binance.vision)，自动获取市值前100的USDT交易对
 通知方式：企业微信机器人（支持批量合并推送）
 """
 
@@ -26,15 +26,15 @@ BB_PERIOD = 20
 EMA_PERIOD = 89
 KLINES_LIMIT = 100
 REQUEST_DELAY = 0.3
-TOP_N = 100
-MIN_TOTAL_CHANGE = 2.0          # 三连涨/跌累计幅度必须大于 2%（绝对值）
+TOP_N = 100                         # ← 修改为前100名
+MIN_TOTAL_CHANGE = 2.0
 
 BINANCE_API_BASE = "https://data-api.binance.vision"
 MEXC_API_BASE = "https://api.mexc.com"
 
 # ==================== 获取币种列表 ====================
 
-def get_top_usdt_pairs(limit: int = 300):
+def get_top_usdt_pairs(limit: int = 100):   # ← 默认参数也改为100
     urls = [
         f"{BINANCE_API_BASE}/api/v3/ticker/24hr",
         f"{MEXC_API_BASE}/api/v3/ticker/24hr"
@@ -127,7 +127,6 @@ def check_three_candles(df: pd.DataFrame):
     is_up = last_3["close"] > last_3["open"]
     three_up = is_up.all()
     three_down = (~is_up).all()
-    # 计算累计涨跌幅：从第一根开盘到第三根收盘
     open_first = last_3.iloc[0]["open"]
     close_last = last_3.iloc[-1]["close"]
     total_change = (close_last - open_first) / open_first * 100
@@ -150,7 +149,6 @@ def scan_symbol(symbol: str):
     else:
         price_change = 0.0
     
-    # 判定是否符合条件（增加幅度过滤）
     is_valid = False
     match_type = None
     if three_up and latest_bb_middle > latest_ema_89 and total_change > MIN_TOTAL_CHANGE:
@@ -171,8 +169,8 @@ def scan_symbol(symbol: str):
         "bb_above_ema": latest_bb_middle > latest_ema_89,
         "three_up": three_up,
         "three_down": three_down,
-        "price_change_3h": price_change,      # 最近3小时相对于4小时前的涨跌幅
-        "total_change": total_change,         # 三连累计涨跌幅
+        "price_change_3h": price_change,
+        "total_change": total_change,
         "datetime": df["datetime"].iloc[-1],
         "match": match_type
     }
@@ -216,10 +214,9 @@ def send_batch_results(results: list, batch_size: int = 10):
         for r in batch:
             symbol = r["symbol"]
             price = r["current_price"]
-            change = r["total_change"]          # 三连累计幅度
+            change = r["total_change"]
             match_type = "📈" if r["match"] == "UP" else "📉"
             dt = r["datetime"].strftime("%H:%M")
-            # 显示涨跌方向符号
             sign = "+" if change > 0 else ""
             lines.append(f"{match_type} {symbol} ${price:.4f} ({sign}{change:.2f}%) @{dt}")
         header = f"🔔 发现 {len(batch)} 个信号 (共 {total} 个)\n"
