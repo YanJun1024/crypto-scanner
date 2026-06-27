@@ -26,7 +26,7 @@ BB_PERIOD = 20
 EMA_PERIOD = 89
 KLINES_LIMIT = 100
 REQUEST_DELAY = 0.3
-TOP_N = 300
+TOP_N = 100
 MIN_TOTAL_CHANGE = 2.0          # 三连涨/跌累计幅度必须大于 2%（绝对值）
 
 BINANCE_API_BASE = "https://data-api.binance.vision"
