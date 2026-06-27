@@ -140,7 +140,7 @@ SYMBOLS = {
 BB_PERIOD = 20
 EMA_PERIOD = 89
 OHLC_DAYS = 7
-REQUEST_DELAY = 3.5          # 增加到 3.5 秒（约 17 次/分钟）
+REQUEST_DELAY = 4          # 增加到 3.5 秒（约 17 次/分钟）
 RETRY_DELAY = 10             # 遇到 429 后固定等待 10 秒再重试
 MAX_RETRIES = 1              # 只重试 1 次，避免浪费配额
 
