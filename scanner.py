@@ -4,7 +4,7 @@
 """
 加密货币小时线扫描器 - 三连涨/跌 + 布林带与EMA条件
 数据源：币安备用域名 (data-api.binance.vision)，自动获取市值前300的USDT交易对
-通知方式：企业微信机器人
+通知方式：企业微信机器人（支持批量合并推送）
 """
 
 import requests
@@ -14,6 +14,7 @@ from datetime import datetime
 import time
 import os
 import sys
+import math
 
 # ==================== 配置 ====================
 
@@ -21,29 +22,22 @@ WECHAT_WEBHOOK_URL = os.environ.get("FEISHU_WEBHOOK_URL", "")
 if not WECHAT_WEBHOOK_URL:
     print("⚠️ 未设置 FEISHU_WEBHOOK_URL 环境变量", flush=True)
 
-# 技术指标参数
 BB_PERIOD = 20
 EMA_PERIOD = 89
 KLINES_LIMIT = 100
-REQUEST_DELAY = 0.3         # 币安备用域名限流宽松，0.3秒/个，300个约90秒
+REQUEST_DELAY = 0.3
 TOP_N = 300
 
-# API 备用域名
 BINANCE_API_BASE = "https://data-api.binance.vision"
-MEXC_API_BASE = "https://api.mexc.com"   # 备用
+MEXC_API_BASE = "https://api.mexc.com"
 
-# ==================== 动态获取币种列表（支持多数据源） ====================
+# ==================== 获取币种列表 ====================
 
 def get_top_usdt_pairs(limit: int = 300):
-    """
-    尝试从币安备用域名获取 USDT 交易对列表，失败则尝试 MEXC，再失败则返回固定列表
-    """
-    # 候选 API 地址
     urls = [
         f"{BINANCE_API_BASE}/api/v3/ticker/24hr",
         f"{MEXC_API_BASE}/api/v3/ticker/24hr"
     ]
-    
     for url in urls:
         try:
             print(f"[INFO] 尝试从 {url} 获取交易对列表...", flush=True)
@@ -54,7 +48,6 @@ def get_top_usdt_pairs(limit: int = 300):
             data = response.json()
             if not data:
                 continue
-            
             usdt_pairs = []
             for item in data:
                 symbol = item.get("symbol", "")
@@ -71,7 +64,6 @@ def get_top_usdt_pairs(limit: int = 300):
                         })
                     except (ValueError, TypeError):
                         continue
-            
             if not usdt_pairs:
                 continue
             usdt_pairs.sort(key=lambda x: x["weight"], reverse=True)
@@ -81,8 +73,7 @@ def get_top_usdt_pairs(limit: int = 300):
         except Exception as e:
             print(f"  Error: {e}", flush=True)
             continue
-    
-    # 所有数据源均失败，返回降级列表
+
     print("[WARN] 所有数据源均失败，使用硬编码主流币种列表", flush=True)
     return [
         "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
@@ -91,19 +82,15 @@ def get_top_usdt_pairs(limit: int = 300):
         "FILUSDT", "VETUSDT", "XTZUSDT", "EOSUSDT", "XMRUSDT"
     ]
 
-# ==================== K线数据获取（使用备用域名） ====================
+# ==================== 获取K线 ====================
 
 def get_klines(symbol: str, interval: str = "1h", limit: int = 100):
-    """
-    从币安备用域名获取 K 线数据
-    """
     url = f"{BINANCE_API_BASE}/api/v3/klines"
     params = {
         "symbol": symbol,
         "interval": interval,
         "limit": limit
     }
-    
     try:
         response = requests.get(url, params=params, timeout=15)
         if response.status_code != 200:
@@ -111,7 +98,6 @@ def get_klines(symbol: str, interval: str = "1h", limit: int = 100):
         data = response.json()
         if not data:
             return None
-        
         df = pd.DataFrame(data, columns=[
             "timestamp", "open", "high", "low", "close", "volume",
             "close_time", "quote_volume", "trades", "taker_buy_base",
@@ -122,7 +108,7 @@ def get_klines(symbol: str, interval: str = "1h", limit: int = 100):
             df[col] = df[col].astype(float)
         df["datetime"] = pd.to_datetime(df["timestamp"], unit="ms")
         return df
-    except Exception as e:
+    except Exception:
         return None
 
 # ==================== 指标计算 ====================
@@ -180,12 +166,13 @@ def scan_symbol(symbol: str):
     result["match"] = None
     return result
 
-# ==================== 企业微信推送 ====================
+# ==================== 企业微信推送（支持批量） ====================
 
 def send_to_wechat(message: str):
+    """发送单条消息，内部会处理异常"""
     if not WECHAT_WEBHOOK_URL:
         print("  ⚠️ 企业微信 Webhook URL 未设置", flush=True)
-        return
+        return False
     headers = {"Content-Type": "application/json"}
     payload = {
         "msgtype": "text",
@@ -197,12 +184,53 @@ def send_to_wechat(message: str):
         result = response.json()
         if result.get("errcode") == 0:
             print("  ✅ 企业微信消息发送成功", flush=True)
+            return True
         else:
             print(f"  ⚠️ 企业微信消息发送失败: {result}", flush=True)
+            return False
     except Exception as e:
         print(f"  Error: 发送企业微信消息失败: {e}", flush=True)
+        return False
 
-def format_result_message(result: dict) -> str:
+def send_batch_results(results: list, batch_size: int = 10):
+    """
+    将符合条件的币种分批发送，每批最多 batch_size 个
+    """
+    if not results:
+        return
+    total = len(results)
+    # 计算需要分几批
+    batches = math.ceil(total / batch_size)
+    for i in range(batches):
+        start = i * batch_size
+        end = min(start + batch_size, total)
+        batch = results[start:end]
+        # 构建单条消息，包含这批所有币种
+        lines = []
+        for r in batch:
+            symbol = r["symbol"]
+            price = r["current_price"]
+            change = r["price_change_3h"]
+            match_type = "📈" if r["match"] == "UP" else "📉"
+            dt = r["datetime"].strftime("%H:%M")
+            lines.append(f"{match_type} {symbol} ${price:.4f} ({change:+.2f}%) @{dt}")
+        # 添加标题
+        header = f"🔔 发现 {len(batch)} 个信号 (共 {total} 个)\n"
+        body = "\n".join(lines)
+        message = header + body
+        # 发送
+        print(f"  [批次 {i+1}/{batches}] 发送 {len(batch)} 个信号...", flush=True)
+        success = send_to_wechat(message)
+        if not success:
+            print(f"  ⚠️ 批次 {i+1} 发送失败，跳过剩余批次", flush=True)
+            break
+        # 批次间延时，确保不超过频率限制
+        if i < batches - 1:
+            time.sleep(2)  # 每批间隔2秒，20批最多40秒，但一般信号不会很多
+
+# ==================== 格式化单条信号（用于调试，实际不用） ====================
+
+def format_single_result(result: dict) -> str:
     symbol = result["symbol"]
     price = result["current_price"]
     bb = result["bb_middle"]
@@ -225,7 +253,7 @@ def format_result_message(result: dict) -> str:
 def main():
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 开始扫描...", flush=True)
     
-    # 第一步：动态获取交易对列表
+    # 获取币种列表
     symbols = get_top_usdt_pairs(limit=TOP_N)
     total = len(symbols)
     print(f"[INFO] 共 {total} 个币种待扫描", flush=True)
@@ -239,12 +267,13 @@ def main():
             print(f"  ✅ {symbol} 符合条件: {res['match']}", flush=True)
         time.sleep(REQUEST_DELAY)
     
+    # ---- 推送逻辑 ----
     if matched:
-        for r in matched:
-            send_to_wechat(format_result_message(r))
-            time.sleep(0.5)
-        print(f"[INFO] 发现 {len(matched)} 个符合条件的币种，已推送", flush=True)
+        print(f"[INFO] 共发现 {len(matched)} 个符合条件的币种，开始分批推送...", flush=True)
+        # 分批发送（每批最多10个）
+        send_batch_results(matched, batch_size=10)
     else:
+        # 无信号时发送心跳
         heartbeat = f"🕐 扫描完成 [{datetime.now().strftime('%Y-%m-%d %H:%M')}]，扫描 {total} 个币种，未发现符合条件的标的。"
         send_to_wechat(heartbeat)
         print("[INFO] 未发现符合条件的币种，已发送心跳通知", flush=True)
