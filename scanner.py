@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-加密货币小时线扫描器 - 三连涨/跌 + 布林带与EMA条件
+加密货币小时线扫描器 - 三连涨/跌 + 布林带与EMA条件 + 累计幅度>2%过滤
 数据源：币安备用域名 (data-api.binance.vision)，自动获取市值前300的USDT交易对
 通知方式：企业微信机器人（支持批量合并推送）
 """
@@ -27,6 +27,7 @@ EMA_PERIOD = 89
 KLINES_LIMIT = 100
 REQUEST_DELAY = 0.3
 TOP_N = 300
+MIN_TOTAL_CHANGE = 2.0          # 三连涨/跌累计幅度必须大于 2%（绝对值）
 
 BINANCE_API_BASE = "https://data-api.binance.vision"
 MEXC_API_BASE = "https://api.mexc.com"
@@ -121,12 +122,16 @@ def calculate_indicators(df: pd.DataFrame):
 
 def check_three_candles(df: pd.DataFrame):
     if len(df) < 4:
-        return False, False
+        return False, False, 0.0
     last_3 = df.tail(3)
     is_up = last_3["close"] > last_3["open"]
     three_up = is_up.all()
     three_down = (~is_up).all()
-    return three_up, three_down
+    # 计算累计涨跌幅：从第一根开盘到第三根收盘
+    open_first = last_3.iloc[0]["open"]
+    close_last = last_3.iloc[-1]["close"]
+    total_change = (close_last - open_first) / open_first * 100
+    return three_up, three_down, total_change
 
 # ==================== 扫描单个币种 ====================
 
@@ -138,12 +143,25 @@ def scan_symbol(symbol: str):
     bb_middle, ema_89 = calculate_indicators(df)
     latest_bb_middle = bb_middle.iloc[-1]
     latest_ema_89 = ema_89.iloc[-1]
-    three_up, three_down = check_three_candles(df)
+    three_up, three_down, total_change = check_three_candles(df)
     
     if len(df) >= 4:
         price_change = ((df["close"].iloc[-1] - df["close"].iloc[-4]) / df["close"].iloc[-4] * 100)
     else:
         price_change = 0.0
+    
+    # 判定是否符合条件（增加幅度过滤）
+    is_valid = False
+    match_type = None
+    if three_up and latest_bb_middle > latest_ema_89 and total_change > MIN_TOTAL_CHANGE:
+        is_valid = True
+        match_type = "UP"
+    elif three_down and latest_bb_middle < latest_ema_89 and total_change < -MIN_TOTAL_CHANGE:
+        is_valid = True
+        match_type = "DOWN"
+    
+    if not is_valid:
+        return None
     
     result = {
         "symbol": symbol,
@@ -153,23 +171,16 @@ def scan_symbol(symbol: str):
         "bb_above_ema": latest_bb_middle > latest_ema_89,
         "three_up": three_up,
         "three_down": three_down,
-        "price_change_3h": price_change,
-        "datetime": df["datetime"].iloc[-1]
+        "price_change_3h": price_change,      # 最近3小时相对于4小时前的涨跌幅
+        "total_change": total_change,         # 三连累计涨跌幅
+        "datetime": df["datetime"].iloc[-1],
+        "match": match_type
     }
-    
-    if three_up and latest_bb_middle > latest_ema_89:
-        result["match"] = "UP"
-        return result
-    if three_down and latest_bb_middle < latest_ema_89:
-        result["match"] = "DOWN"
-        return result
-    result["match"] = None
     return result
 
 # ==================== 企业微信推送（支持批量） ====================
 
 def send_to_wechat(message: str):
-    """发送单条消息，内部会处理异常"""
     if not WECHAT_WEBHOOK_URL:
         print("  ⚠️ 企业微信 Webhook URL 未设置", flush=True)
         return False
@@ -193,67 +204,40 @@ def send_to_wechat(message: str):
         return False
 
 def send_batch_results(results: list, batch_size: int = 10):
-    """
-    将符合条件的币种分批发送，每批最多 batch_size 个
-    """
     if not results:
         return
     total = len(results)
-    # 计算需要分几批
     batches = math.ceil(total / batch_size)
     for i in range(batches):
         start = i * batch_size
         end = min(start + batch_size, total)
         batch = results[start:end]
-        # 构建单条消息，包含这批所有币种
         lines = []
         for r in batch:
             symbol = r["symbol"]
             price = r["current_price"]
-            change = r["price_change_3h"]
+            change = r["total_change"]          # 三连累计幅度
             match_type = "📈" if r["match"] == "UP" else "📉"
             dt = r["datetime"].strftime("%H:%M")
-            lines.append(f"{match_type} {symbol} ${price:.4f} ({change:+.2f}%) @{dt}")
-        # 添加标题
+            # 显示涨跌方向符号
+            sign = "+" if change > 0 else ""
+            lines.append(f"{match_type} {symbol} ${price:.4f} ({sign}{change:.2f}%) @{dt}")
         header = f"🔔 发现 {len(batch)} 个信号 (共 {total} 个)\n"
         body = "\n".join(lines)
         message = header + body
-        # 发送
         print(f"  [批次 {i+1}/{batches}] 发送 {len(batch)} 个信号...", flush=True)
         success = send_to_wechat(message)
         if not success:
             print(f"  ⚠️ 批次 {i+1} 发送失败，跳过剩余批次", flush=True)
             break
-        # 批次间延时，确保不超过频率限制
         if i < batches - 1:
-            time.sleep(2)  # 每批间隔2秒，20批最多40秒，但一般信号不会很多
-
-# ==================== 格式化单条信号（用于调试，实际不用） ====================
-
-def format_single_result(result: dict) -> str:
-    symbol = result["symbol"]
-    price = result["current_price"]
-    bb = result["bb_middle"]
-    ema = result["ema_89"]
-    change = result["price_change_3h"]
-    match_type = "📈 三连涨" if result["match"] == "UP" else "📉 三连跌"
-    dt = result["datetime"].strftime("%Y-%m-%d %H:%M")
-    return f"""🔔 【{symbol}】{match_type}
-
-⏰ 时间: {dt}
-💰 当前价格: ${price:.4f}
-📊 布林带中线: ${bb:.4f}
-📈 89EMA: ${ema:.4f}
-📉 3小时涨跌幅: {change:+.2f}%
-
-条件: 布林带中线 {'>' if result['bb_above_ema'] else '<'} 89EMA ✅"""
+            time.sleep(2)
 
 # ==================== 主函数 ====================
 
 def main():
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 开始扫描...", flush=True)
     
-    # 获取币种列表
     symbols = get_top_usdt_pairs(limit=TOP_N)
     total = len(symbols)
     print(f"[INFO] 共 {total} 个币种待扫描", flush=True)
@@ -262,18 +246,15 @@ def main():
     for idx, symbol in enumerate(symbols, 1):
         print(f"  [{idx}/{total}] 扫描 {symbol}...", flush=True)
         res = scan_symbol(symbol)
-        if res and res["match"]:
+        if res:
             matched.append(res)
-            print(f"  ✅ {symbol} 符合条件: {res['match']}", flush=True)
+            print(f"  ✅ {symbol} 符合条件 (累计幅度 {res['total_change']:.2f}%)", flush=True)
         time.sleep(REQUEST_DELAY)
     
-    # ---- 推送逻辑 ----
     if matched:
         print(f"[INFO] 共发现 {len(matched)} 个符合条件的币种，开始分批推送...", flush=True)
-        # 分批发送（每批最多10个）
         send_batch_results(matched, batch_size=10)
     else:
-        # 无信号时发送心跳
         heartbeat = f"🕐 扫描完成 [{datetime.now().strftime('%Y-%m-%d %H:%M')}]，扫描 {total} 个币种，未发现符合条件的标的。"
         send_to_wechat(heartbeat)
         print("[INFO] 未发现符合条件的币种，已发送心跳通知", flush=True)
