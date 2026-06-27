@@ -3,7 +3,7 @@
 
 """
 加密货币小时线扫描器 - 三连涨/跌 + 布林带与EMA条件
-数据源：CoinGecko OHLC 接口（带频率控制和智能重试）
+数据源：币安 Binance (自动获取市值前300的USDT交易对)
 通知方式：企业微信机器人
 """
 
@@ -21,174 +21,95 @@ WECHAT_WEBHOOK_URL = os.environ.get("FEISHU_WEBHOOK_URL", "")
 if not WECHAT_WEBHOOK_URL:
     print("⚠️ 未设置 FEISHU_WEBHOOK_URL 环境变量", flush=True)
 
-# ==================== 币种列表（清洗后，去重） ====================
-SYMBOLS = {
-    #  Layer 1 公链
-    "bitcoin": "BTCUSDT",
-    "ethereum": "ETHUSDT",
-    "binancecoin": "BNBUSDT",
-    "solana": "SOLUSDT",
-    "ripple": "XRPUSDT",
-    "cardano": "ADAUSDT",
-    "avalanche-2": "AVAXUSDT",
-    "polkadot": "DOTUSDT",
-    "near": "NEARUSDT",
-    "aptos": "APTUSDT",
-    "sui": "SUIUSDT",
-    "toncoin": "TONUSDT",
-    "trx": "TRXUSDT",
-    "litecoin": "LTCUSDT",
-    "bitcoin-cash": "BCHUSDT",
-    "monero": "XMRUSDT",
-    "ethereum-classic": "ETCUSDT",
-    "algorand": "ALGOUSDT",
-    "vechain": "VETUSDT",
-    "internet-computer": "ICPUSDT",
-    "hedera-hashgraph": "HBARUSDT",
-    "quant-network": "QNTUSDT",
-    "filecoin": "FILUSDT",
-    "theta-token": "THETAUSDT",
-    "tezos": "XTZUSDT",
-    "eos": "EOSUSDT",
-    "nano": "NANOUSDT",
-    "icon": "ICXUSDT",
-    "ontology": "ONTUSDT",
-    "harmony": "ONEUSDT",
-    "kadena": "KDAUSDT",
-    "mina": "MINAUSDT",
-    "celo": "CELOUSDT",
-    #  DeFi 与 DEX
-    "chainlink": "LINKUSDT",
-    "uniswap": "UNIUSDT",
-    "aave": "AAVEUSDT",
-    "maker": "MKRUSDT",
-    "compound": "COMPUSDT",
-    "curve-dao-token": "CRVUSDT",
-    "sushi": "SUSHIUSDT",
-    "pancakeswap": "CAKEUSDT",
-    "thorchain": "RUNEUSDT",
-    "lido-dao": "LDOUSDT",
-    "rocket-pool": "RPLUSDT",
-    "dydx": "DYDXUSDT",
-    "gmx": "GMXUSDT",
-    "1inch": "1INCHUSDT",
-    "balancer": "BALUSDT",
-    "yearn-finance": "YFIUSDT",
-    #  Layer 2 与跨链
-    "polygon": "MATICUSDT",
-    "arbitrum": "ARBUSDT",
-    "optimism": "OPUSDT",
-    "cosmos": "ATOMUSDT",
-    "celestia": "TIAUSDT",
-    "osmosis": "OSMOUSDT",
-    "injective": "INJUSDT",
-    "sei": "SEIUSDT",
-    "manta-network": "MANTAUSDT",
-    "zksync": "ZKUSDT",
-    "starknet": "STRKUSDT",
-    #  包装资产
-    "wrapped-bitcoin": "WBTCUSDT",
-    "weth": "WETHUSDT",
-    "staked-ether": "STETHUSDT",
-    "bnb": "BNBUSDT",
-    "okb": "OKBUSDT",
-    "cronos": "CROUSDT",
-    "leo-token": "LEOUSDT",
-    "bitget-token": "BGBUSDT",
-    #  存储与计算
-    "arweave": "ARUSDT",
-    "siacoin": "SCUSDT",
-    "golem": "GLMUSDT",
-    "livepeer": "LPTUSDT",
-    "akash-network": "AKTUSDT",
-    #  Meme
-    "dogecoin": "DOGEUSDT",
-    "shiba-inu": "SHIBUSDT",
-    "pepe": "PEPEUSDT",
-    "bonk": "BONKUSDT",
-    "floki": "FLOKIUSDT",
-    "dogwifhat": "WIFUSDT",
-    #  游戏与元宇宙
-    "decentraland": "MANAUSDT",
-    "the-sandbox": "SANDUSDT",
-    "axie-infinity": "AXSUSDT",
-    "gala": "GALAUSDT",
-    "immutable-x": "IMXUSDT",
-    "illuvium": "ILVUSDT",
-    "pixel": "PIXELUSDT",
-    "portal": "PORTALUSDT",
-    #  AI
-    "fetch-ai": "FETUSDT",
-    "singularitynet": "AGIXUSDT",
-    "ocean-protocol": "OCEANUSDT",
-    "numeraire": "NMRUSDT",
-    "bittensor": "TAOUSDT",
-    "render-token": "RNDRUSDT",
-    #  其他
-    "kucoin-shares": "KCSUSDT",
-    "huobi-token": "HTUSDT",
-    "gatechain-token": "GTUSDT",
-    "nexo": "NEXOUSDT",
-    "celsius-network": "CELUSDT",
-    "helium": "HNTUSDT",
-    "basic-attention-token": "BATUSDT",
-    "zcash": "ZECUSDT",
-    "dash": "DASHUSDT",
-}
-
 # 技术指标参数
 BB_PERIOD = 20
 EMA_PERIOD = 89
-OHLC_DAYS = 7
-REQUEST_DELAY = 4          # 增加到 3.5 秒（约 17 次/分钟）
-RETRY_DELAY = 10             # 遇到 429 后固定等待 10 秒再重试
-MAX_RETRIES = 1              # 只重试 1 次，避免浪费配额
+KLINES_LIMIT = 100
+REQUEST_DELAY = 0.3         # 币安限制宽松，0.3秒/个，300个约90秒
+TOP_N = 300                 # 取市值前300名
 
-# ==================== 数据获取（智能重试） ====================
+# ==================== 动态获取币种列表 ====================
 
-def get_ohlc_with_retry(coin_id: str, vs_currency: str = "usd", days: int = 7):
+def get_top_usdt_pairs(limit: int = 300):
     """
-    获取 OHLC 数据，遇到 404 直接跳过，429 等待固定时间后重试一次
+    从币安获取所有 USDT 交易对，按 24h 交易量（近似市值）排序，取前 N 个
+    返回: ["BTCUSDT", "ETHUSDT", ...]
     """
-    url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/ohlc"
+    url = "https://api.binance.com/api/v3/ticker/24hr"
+    
+    try:
+        response = requests.get(url, timeout=30)
+        response.raise_for_status()
+        data = response.json()
+        
+        # 筛选 USDT 交易对，并计算"市值权重" = 价格 × 交易量（近似市值）
+        usdt_pairs = []
+        for item in data:
+            symbol = item.get("symbol", "")
+            if symbol.endswith("USDT") and not any(x in symbol for x in ["UPUSDT", "DOWNUSDT", "BULLUSDT", "BEARUSDT"]):
+                try:
+                    last_price = float(item.get("lastPrice", 0))
+                    volume = float(item.get("volume", 0))
+                    # 近似市值 = 价格 × 交易量（24h交易量可反映流动性热度）
+                    weight = last_price * volume
+                    usdt_pairs.append({
+                        "symbol": symbol,
+                        "weight": weight,
+                        "price": last_price,
+                        "volume": volume
+                    })
+                except (ValueError, TypeError):
+                    continue
+        
+        # 按权重降序排列
+        usdt_pairs.sort(key=lambda x: x["weight"], reverse=True)
+        
+        # 取前 N 个
+        top_pairs = [p["symbol"] for p in usdt_pairs[:limit]]
+        print(f"[INFO] 成功获取 {len(top_pairs)} 个 USDT 交易对", flush=True)
+        return top_pairs
+        
+    except Exception as e:
+        print(f"[ERROR] 获取币种列表失败: {e}", flush=True)
+        # 降级方案：返回固定的主流币种列表
+        return [
+            "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
+            "ADAUSDT", "DOGEUSDT", "AVAXUSDT", "DOTUSDT", "LINKUSDT"
+        ]
+
+# ==================== 数据获取 ====================
+
+def get_klines(symbol: str, interval: str = "1h", limit: int = 100):
+    """
+    从币安获取 K 线数据
+    """
+    base_url = "https://api.binance.com/api/v3/klines"
     params = {
-        "vs_currency": vs_currency,
-        "days": days,
-        "precision": "full"
+        "symbol": symbol,
+        "interval": interval,
+        "limit": limit
     }
     
-    for attempt in range(MAX_RETRIES + 1):  # 0 和 1 共两次尝试
-        try:
-            response = requests.get(url, params=params, timeout=15)
-            if response.status_code == 404:
-                print(f"  ⚠️ {coin_id} 无效ID，跳过", flush=True)
-                return None
-            if response.status_code == 429:
-                if attempt < MAX_RETRIES:
-                    print(f"  ⏳ 触发 429，等待 {RETRY_DELAY}s 后重试...", flush=True)
-                    time.sleep(RETRY_DELAY)
-                    continue
-                else:
-                    print(f"  ⚠️ {coin_id} 仍被限流，跳过", flush=True)
-                    return None
-            response.raise_for_status()
-            data = response.json()
-            if not data:
-                print(f"  ⚠️ {coin_id} 返回空数据", flush=True)
-                return None
-            df = pd.DataFrame(data, columns=["timestamp", "open", "high", "low", "close"])
-            df["datetime"] = pd.to_datetime(df["timestamp"], unit="ms")
-            for col in ["open", "high", "low", "close"]:
-                df[col] = df[col].astype(float)
-            return df
-        except requests.exceptions.RequestException as e:
-            if attempt < MAX_RETRIES:
-                print(f"  ⚠️ 请求异常，等待 {RETRY_DELAY}s 后重试...", flush=True)
-                time.sleep(RETRY_DELAY)
-            else:
-                print(f"  Error: 获取 {coin_id} 失败: {e}", flush=True)
-                return None
-    return None
+    try:
+        response = requests.get(base_url, params=params, timeout=15)
+        if response.status_code != 200:
+            return None
+        data = response.json()
+        if not data:
+            return None
+        
+        df = pd.DataFrame(data, columns=[
+            "timestamp", "open", "high", "low", "close", "volume",
+            "close_time", "quote_volume", "trades", "taker_buy_base",
+            "taker_buy_quote", "ignore"
+        ])
+        df = df[["timestamp", "open", "high", "low", "close"]]
+        for col in ["open", "high", "low", "close"]:
+            df[col] = df[col].astype(float)
+        df["datetime"] = pd.to_datetime(df["timestamp"], unit="ms")
+        return df
+    except Exception as e:
+        return None
 
 # ==================== 指标计算 ====================
 
@@ -209,8 +130,8 @@ def check_three_candles(df: pd.DataFrame):
 
 # ==================== 扫描单个币种 ====================
 
-def scan_symbol(coin_id: str, display_name: str):
-    df = get_ohlc_with_retry(coin_id, days=OHLC_DAYS)
+def scan_symbol(symbol: str):
+    df = get_klines(symbol, limit=KLINES_LIMIT)
     if df is None or len(df) < EMA_PERIOD + 3:
         return None
     
@@ -225,7 +146,7 @@ def scan_symbol(coin_id: str, display_name: str):
         price_change = 0.0
     
     result = {
-        "symbol": display_name,
+        "symbol": symbol,
         "current_price": df["close"].iloc[-1],
         "bb_middle": latest_bb_middle,
         "ema_89": latest_ema_89,
@@ -289,17 +210,21 @@ def format_result_message(result: dict) -> str:
 
 def main():
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 开始扫描...", flush=True)
-    matched = []
-    total = len(SYMBOLS)
+    
+    # 第一步：动态获取市值前300的USDT交易对
+    print("[INFO] 正在获取币安 USDT 交易对列表...", flush=True)
+    symbols = get_top_usdt_pairs(limit=TOP_N)
+    total = len(symbols)
     print(f"[INFO] 共 {total} 个币种待扫描", flush=True)
     
-    for idx, (coin_id, display_name) in enumerate(SYMBOLS.items(), 1):
-        print(f"  [{idx}/{total}] 扫描 {display_name}...", flush=True)
-        res = scan_symbol(coin_id, display_name)
+    matched = []
+    for idx, symbol in enumerate(symbols, 1):
+        print(f"  [{idx}/{total}] 扫描 {symbol}...", flush=True)
+        res = scan_symbol(symbol)
         if res and res["match"]:
             matched.append(res)
-            print(f"  ✅ {display_name} 符合条件: {res['match']}", flush=True)
-        time.sleep(REQUEST_DELAY)  # 每次请求后固定休息
+            print(f"  ✅ {symbol} 符合条件: {res['match']}", flush=True)
+        time.sleep(REQUEST_DELAY)
     
     if matched:
         for r in matched:
