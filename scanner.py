@@ -42,7 +42,7 @@ def get_klines(symbol: str, interval: str = "1h", limit: int = 100):
     从币安获取K线数据
     返回: DataFrame，包含 open, high, low, close, volume
     """
-    url = "https://api.binance.com/api/v3/klines"
+    url = "https://api.mexc.com/api/v3/klines"
     params = {
         "symbol": symbol,
         "interval": interval,
