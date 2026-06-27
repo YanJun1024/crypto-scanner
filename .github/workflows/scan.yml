@@ -2,9 +2,10 @@ name: Crypto Hourly Scanner
 
 on:
   # 定时触发：每小时运行一次（UTC 时间）
+  # 如果想按北京时间调整，请自行计算 UTC 偏移
   schedule:
     - cron: '0 * * * *'
-  # 手动触发：方便在 GitHub 页面上点击按钮测试
+  # 手动触发：方便在 GitHub Actions 页面点击运行测试
   workflow_dispatch:
 
 jobs:
@@ -12,23 +13,23 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 第1步：拉取仓库代码
+      # 1. 拉取代码（v4 已支持 Node.js 24）
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 第2步：安装 Python
+      # 2. 安装 Python 3.11（v5 已支持 Node.js 24）
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      # 第3步：安装依赖
+      # 3. 安装项目依赖
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-      # 第4步：运行扫描脚本
+      # 4. 运行扫描脚本（从 Secrets 读取飞书 Webhook）
       - name: Run scanner
         env:
           FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
