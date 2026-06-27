@@ -3,7 +3,7 @@
 
 """
 加密货币小时线扫描器 - 三连涨/跌 + 布林带与EMA条件
-数据源：CoinGecko OHLC 接口（带频率控制和重试）
+数据源：CoinGecko OHLC 接口（带频率控制和智能重试）
 通知方式：企业微信机器人
 """
 
@@ -13,7 +13,7 @@ import numpy as np
 from datetime import datetime
 import time
 import os
-import sys          # 用于强制刷新输出
+import sys
 
 # ==================== 配置 ====================
 
@@ -86,12 +86,7 @@ SYMBOLS = {
     "manta-network": "MANTAUSDT",
     "zksync": "ZKUSDT",
     "starknet": "STRKUSDT",
-    #  稳定币与基础设施（剔除纯稳定币，避免无意义信号）
-    # "tether": "USDTUSDT",        # 稳定币无波动，不参与扫描
-    # "usd-coin": "USDCUSDT",
-    # "dai": "DAIUSDT",
-    # "true-usd": "TUSDUSDT",
-    # "frax": "FRAXUSDT",
+    #  包装资产
     "wrapped-bitcoin": "WBTCUSDT",
     "weth": "WETHUSDT",
     "staked-ether": "STETHUSDT",
@@ -100,21 +95,19 @@ SYMBOLS = {
     "cronos": "CROUSDT",
     "leo-token": "LEOUSDT",
     "bitget-token": "BGBUSDT",
-    #  去中心化存储与计算
+    #  存储与计算
     "arweave": "ARUSDT",
     "siacoin": "SCUSDT",
     "golem": "GLMUSDT",
     "livepeer": "LPTUSDT",
     "akash-network": "AKTUSDT",
-    #  Meme 与社区币
+    #  Meme
     "dogecoin": "DOGEUSDT",
     "shiba-inu": "SHIBUSDT",
     "pepe": "PEPEUSDT",
     "bonk": "BONKUSDT",
     "floki": "FLOKIUSDT",
     "dogwifhat": "WIFUSDT",
-    # "bret": "BRETTUSDT",         # CoinGecko ID 可能不准确，暂注释
-    # "popcat": "POPCATUSDT",
     #  游戏与元宇宙
     "decentraland": "MANAUSDT",
     "the-sandbox": "SANDUSDT",
@@ -124,7 +117,7 @@ SYMBOLS = {
     "illuvium": "ILVUSDT",
     "pixel": "PIXELUSDT",
     "portal": "PORTALUSDT",
-    #  AI 与数据
+    #  AI
     "fetch-ai": "FETUSDT",
     "singularitynet": "AGIXUSDT",
     "ocean-protocol": "OCEANUSDT",
@@ -147,13 +140,15 @@ SYMBOLS = {
 BB_PERIOD = 20
 EMA_PERIOD = 89
 OHLC_DAYS = 7
-REQUEST_DELAY = 2.0          # 增加到 2 秒，避免触发 429 限制
+REQUEST_DELAY = 3.5          # 增加到 3.5 秒（约 17 次/分钟）
+RETRY_DELAY = 10             # 遇到 429 后固定等待 10 秒再重试
+MAX_RETRIES = 1              # 只重试 1 次，避免浪费配额
 
-# ==================== 数据获取（带重试与404处理） ====================
+# ==================== 数据获取（智能重试） ====================
 
-def get_ohlc_with_retry(coin_id: str, vs_currency: str = "usd", days: int = 7, max_retries: int = 3):
+def get_ohlc_with_retry(coin_id: str, vs_currency: str = "usd", days: int = 7):
     """
-    带重试机制的 OHLC 获取，遇到 404 直接跳过，429 自动等待后重试
+    获取 OHLC 数据，遇到 404 直接跳过，429 等待固定时间后重试一次
     """
     url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/ohlc"
     params = {
@@ -162,33 +157,37 @@ def get_ohlc_with_retry(coin_id: str, vs_currency: str = "usd", days: int = 7, m
         "precision": "full"
     }
     
-    for attempt in range(max_retries):
+    for attempt in range(MAX_RETRIES + 1):  # 0 和 1 共两次尝试
         try:
             response = requests.get(url, params=params, timeout=15)
             if response.status_code == 404:
                 print(f"  ⚠️ {coin_id} 无效ID，跳过", flush=True)
                 return None
             if response.status_code == 429:
-                wait = (attempt + 1) * 2  # 2s, 4s, 6s
-                print(f"  ⏳ 触发 429 限制，等待 {wait}s 后重试 ({attempt+1}/{max_retries})...", flush=True)
-                time.sleep(wait)
-                continue
+                if attempt < MAX_RETRIES:
+                    print(f"  ⏳ 触发 429，等待 {RETRY_DELAY}s 后重试...", flush=True)
+                    time.sleep(RETRY_DELAY)
+                    continue
+                else:
+                    print(f"  ⚠️ {coin_id} 仍被限流，跳过", flush=True)
+                    return None
             response.raise_for_status()
             data = response.json()
             if not data:
                 print(f"  ⚠️ {coin_id} 返回空数据", flush=True)
                 return None
-            # 转为 DataFrame
             df = pd.DataFrame(data, columns=["timestamp", "open", "high", "low", "close"])
             df["datetime"] = pd.to_datetime(df["timestamp"], unit="ms")
             for col in ["open", "high", "low", "close"]:
                 df[col] = df[col].astype(float)
             return df
         except requests.exceptions.RequestException as e:
-            if attempt == max_retries - 1:
-                print(f"  Error: 获取 {coin_id} 失败，已达最大重试次数: {e}", flush=True)
+            if attempt < MAX_RETRIES:
+                print(f"  ⚠️ 请求异常，等待 {RETRY_DELAY}s 后重试...", flush=True)
+                time.sleep(RETRY_DELAY)
+            else:
+                print(f"  Error: 获取 {coin_id} 失败: {e}", flush=True)
                 return None
-            time.sleep(1)
     return None
 
 # ==================== 指标计算 ====================
@@ -300,7 +299,7 @@ def main():
         if res and res["match"]:
             matched.append(res)
             print(f"  ✅ {display_name} 符合条件: {res['match']}", flush=True)
-        time.sleep(REQUEST_DELAY)  # 避免频率限制
+        time.sleep(REQUEST_DELAY)  # 每次请求后固定休息
     
     if matched:
         for r in matched:
