@@ -1,11 +1,11 @@
 name: Crypto Hourly Scanner
 
 on:
-  # 定时触发：每小时运行一次（UTC 时间）
-  # 如果想按北京时间调整，请自行计算 UTC 偏移
+  # 定时触发：每小时的第6分钟运行（UTC 时间）
+  # 北京时间对应每小时的第6分钟（例如 08:06, 09:06 ...）
   schedule:
-    - cron: '0 * * * *'
-  # 手动触发：方便在 GitHub Actions 页面点击运行测试
+    - cron: '6 * * * *'
+  # 手动触发：方便在 Actions 页面点击运行测试
   workflow_dispatch:
 
 jobs:
@@ -29,7 +29,7 @@ jobs:
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-      # 4. 运行扫描脚本（从 Secrets 读取飞书 Webhook）
+      # 4. 运行扫描脚本（从 Secrets 读取企业微信 Webhook）
       - name: Run scanner
         env:
           FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
