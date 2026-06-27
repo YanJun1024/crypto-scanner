@@ -3,7 +3,7 @@
 
 """
 加密货币小时线扫描器 - 三连涨/跌 + 布林带与EMA条件 + 累计幅度>2%过滤
-数据源：币安备用域名 (data-api.binance.vision)，自动获取市值前100的USDT交易对
+数据源：币安备用域名 (data-api.binance.vision)，自动获取市值前200的USDT交易对
 通知方式：企业微信机器人（支持批量合并推送）
 优化：只使用已收盘的K线，避免未完成K线导致的信号闪烁
 """
@@ -27,7 +27,7 @@ BB_PERIOD = 20
 EMA_PERIOD = 89
 KLINES_LIMIT = 100          # 获取100根，丢弃最后一根后剩99根，足够计算
 REQUEST_DELAY = 0.3
-TOP_N = 100
+TOP_N = 200                  # ← 改为前200名
 MIN_TOTAL_CHANGE = 2.0
 
 BINANCE_API_BASE = "https://data-api.binance.vision"
@@ -35,7 +35,7 @@ MEXC_API_BASE = "https://api.mexc.com"
 
 # ==================== 获取币种列表 ====================
 
-def get_top_usdt_pairs(limit: int = 100):
+def get_top_usdt_pairs(limit: int = 200):   # ← 默认参数改为200
     urls = [
         f"{BINANCE_API_BASE}/api/v3/ticker/24hr",
         f"{MEXC_API_BASE}/api/v3/ticker/24hr"
@@ -140,7 +140,7 @@ def scan_symbol(symbol: str):
     if df is None:
         return None
     
-    # 🟢 关键优化：丢弃当前未收盘的K线（最后一行），避免信号闪烁
+    # 🟢 丢弃当前未收盘的K线（最后一行），避免信号闪烁
     df = df.iloc[:-1]   # 去掉最后一行
     
     # 丢弃后需要确保数据足够计算
